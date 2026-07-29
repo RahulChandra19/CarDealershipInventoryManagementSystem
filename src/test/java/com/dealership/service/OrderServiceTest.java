@@ -1,0 +1,169 @@
+package com.dealership.service;
+
+import com.dealership.entity.*;
+import com.dealership.exception.OrderNotFoundException;
+import com.dealership.exception.UnauthorizedException;
+import com.dealership.repository.OrderRepository;
+import com.dealership.repository.UserRepository;
+import com.dealership.repository.VehicleRepository;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class OrderServiceTest {
+
+    @Mock private OrderRepository orderRepository;
+    @Mock private UserRepository userRepository;
+    @Mock private VehicleRepository vehicleRepository;
+
+    @InjectMocks private OrderServiceImpl orderService;
+
+    // ── helpers ───────────────────────────────────────────────
+
+    private User sampleUser(Long id, String username, String role) {
+        return User.builder()
+                .id(id).username(username).role(role)
+                .email(username + "@example.com")
+                .passwordHash("hashed")
+                .build();
+    }
+
+    private Vehicle sampleVehicle() {
+        return Vehicle.builder()
+                .id(1L).make("Toyota").model("Camry")
+                .price(new BigDecimal("28000")).quantity(3).isActive(true)
+                .build();
+    }
+
+    private Order sampleOrder(User user, Vehicle vehicle, String status) {
+        return Order.builder()
+                .id(1L).user(user).vehicle(vehicle)
+                .quantity(1)
+                .totalPrice(new BigDecimal("28000"))
+                .status(status)
+                .build();
+    }
+
+    // ── getMyOrders ───────────────────────────────────────────
+
+    @Test
+    void getMyOrders_returnsOnlyOrdersBelongingToUser() {
+        User user = sampleUser(1L, "johndoe", "CUSTOMER");
+        Order order = sampleOrder(user, sampleVehicle(), "CONFIRMED");
+        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
+        when(orderRepository.findByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(order));
+
+        List<Order> result = orderService.getMyOrders("johndoe");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getStatus()).isEqualTo("CONFIRMED");
+    }
+
+    @Test
+    void getMyOrders_returnsEmptyList_whenUserHasNoOrders() {
+        User user = sampleUser(1L, "johndoe", "CUSTOMER");
+        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
+        when(orderRepository.findByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of());
+
+        List<Order> result = orderService.getMyOrders("johndoe");
+
+        assertThat(result).isEmpty();
+    }
+
+    // ── getAllOrders ──────────────────────────────────────────
+
+    @Test
+    void getAllOrders_returnsAllOrdersInSystem() {
+        User customer = sampleUser(1L, "johndoe", "CUSTOMER");
+        User another = sampleUser(2L, "janedoe", "CUSTOMER");
+        Order order1 = sampleOrder(customer, sampleVehicle(), "CONFIRMED");
+        Order order2 = sampleOrder(another, sampleVehicle(), "CANCELLED");
+        when(orderRepository.findAllByOrderByCreatedAtDesc()).thenReturn(List.of(order1, order2));
+
+        List<Order> result = orderService.getAllOrders();
+
+        assertThat(result).hasSize(2);
+    }
+
+    // ── cancelOrder ───────────────────────────────────────────
+
+    @Test
+    void cancelOrder_setsStatusCancelled_andRestocksVehicle_whenOwnerCancels() {
+        User user = sampleUser(1L, "johndoe", "CUSTOMER");
+        Vehicle vehicle = sampleVehicle();  // quantity = 3
+        Order order = sampleOrder(user, vehicle, "CONFIRMED");
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
+        when(vehicleRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        orderService.cancelOrder(1L, "johndoe", "CUSTOMER");
+
+        assertThat(order.getStatus()).isEqualTo("CANCELLED");
+        assertThat(vehicle.getQuantity()).isEqualTo(4);  // restocked by 1
+        verify(vehicleRepository).save(vehicle);
+        verify(orderRepository).save(order);
+    }
+
+    @Test
+    void cancelOrder_succeeds_whenAdminCancelsAnyOrder() {
+        User customer = sampleUser(1L, "johndoe", "CUSTOMER");
+        User admin = sampleUser(2L, "admin", "ADMIN");
+        Vehicle vehicle = sampleVehicle();
+        Order order = sampleOrder(customer, vehicle, "CONFIRMED");
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+        when(vehicleRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // admin cancels someone else's order — should succeed
+        orderService.cancelOrder(1L, "admin", "ADMIN");
+
+        assertThat(order.getStatus()).isEqualTo("CANCELLED");
+    }
+
+    @Test
+    void cancelOrder_throwsUnauthorizedException_whenCustomerCancelsOtherUsersOrder() {
+        User owner = sampleUser(1L, "johndoe", "CUSTOMER");
+        User otherUser = sampleUser(2L, "janedoe", "CUSTOMER");
+        Order order = sampleOrder(owner, sampleVehicle(), "CONFIRMED");
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(userRepository.findByUsername("janedoe")).thenReturn(Optional.of(otherUser));
+
+        assertThatThrownBy(() -> orderService.cancelOrder(1L, "janedoe", "CUSTOMER"))
+                .isInstanceOf(UnauthorizedException.class)
+                .hasMessageContaining("not authorized");
+    }
+
+    @Test
+    void cancelOrder_throwsOrderNotFoundException_whenOrderDoesNotExist() {
+        when(orderRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> orderService.cancelOrder(99L, "johndoe", "CUSTOMER"))
+                .isInstanceOf(OrderNotFoundException.class)
+                .hasMessageContaining("99");
+    }
+
+    @Test
+    void cancelOrder_throwsIllegalStateException_whenOrderAlreadyCancelled() {
+        User user = sampleUser(1L, "johndoe", "CUSTOMER");
+        Order order = sampleOrder(user, sampleVehicle(), "CANCELLED");
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(userRepository.findByUsername("johndoe")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> orderService.cancelOrder(1L, "johndoe", "CUSTOMER"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already cancelled");
+    }
+}
