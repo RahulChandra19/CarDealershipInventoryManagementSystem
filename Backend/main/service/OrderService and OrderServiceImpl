@@ -1,0 +1,77 @@
+package com.dealership.service;
+
+import com.dealership.entity.Order;
+
+import java.util.List;
+
+public interface OrderService {
+    List<Order> getMyOrders(String username);
+    List<Order> getAllOrders();
+    void cancelOrder(Long orderId, String username, String role);
+}
+----------------------------------------------------------------------------------------------------
+package com.dealership.service;
+
+import com.dealership.entity.Order;
+import com.dealership.entity.User;
+import com.dealership.exception.OrderNotFoundException;
+import com.dealership.exception.UnauthorizedException;
+import com.dealership.repository.OrderRepository;
+import com.dealership.repository.UserRepository;
+import com.dealership.repository.VehicleRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class OrderServiceImpl implements OrderService {
+
+    private final OrderRepository orderRepository;
+    private final UserRepository userRepository;
+    private final VehicleRepository vehicleRepository;
+
+    @Override
+    public List<Order> getMyOrders(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found: " + username));
+        return orderRepository.findByUserIdOrderByCreatedAtDesc(user.getId());
+    }
+
+    @Override
+    public List<Order> getAllOrders() {
+        return orderRepository.findAllByOrderByCreatedAtDesc();
+    }
+
+    @Override
+    @Transactional
+    public void cancelOrder(Long orderId, String username, String role) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        User requestingUser = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found: " + username));
+
+        // only the order owner or an admin can cancel
+        boolean isOwner = order.getUser().getId().equals(requestingUser.getId());
+        boolean isAdmin = "ADMIN".equals(role);
+
+        if (!isOwner && !isAdmin) {
+            throw new UnauthorizedException("You are not authorized to cancel this order");
+        }
+
+        if ("CANCELLED".equals(order.getStatus())) {
+            throw new IllegalStateException("Order is already cancelled");
+        }
+
+        // restock the vehicle quantity
+        order.getVehicle().setQuantity(
+                order.getVehicle().getQuantity() + order.getQuantity());
+        vehicleRepository.save(order.getVehicle());
+
+        order.setStatus("CANCELLED");
+        orderRepository.save(order);
+    }
+}
