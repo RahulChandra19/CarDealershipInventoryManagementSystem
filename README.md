@@ -593,7 +593,7 @@ target/site/jacoco/index.html
 > Add your screenshots below by replacing the placeholder paths.
 
 ### Login Page
-![Login Page](./screenshots/login.png)
+![Login Page](./screenshots/login.png.png)
 
 ### Register Page
 ![Register Page](./screenshots/register.png)
