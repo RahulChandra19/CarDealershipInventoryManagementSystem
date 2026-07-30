@@ -279,8 +279,6 @@ CREATE TABLE orders (
 
 Base URL: `http://localhost:8080`
 
-Interactive docs available at: [`http://localhost:8080/swagger-ui.html`](http://localhost:8080/swagger-ui.html)
-
 ---
 
 ### Auth Endpoints
@@ -467,8 +465,6 @@ mvn spring-boot:run
 
 The backend starts at: [`http://localhost:8080`](http://localhost:8080)
 
-Swagger UI available at: [`http://localhost:8080/swagger-ui.html`](http://localhost:8080/swagger-ui.html)
-
 **5. Create an admin user**
 
 After the app starts, insert an admin user directly via SQL (the register endpoint creates CUSTOMER role only):
@@ -614,33 +610,18 @@ target/site/jacoco/index.html
 ### Order History
 ![Orders](./screenshots/orders.png)
 
-### Swagger API Documentation
-![Swagger UI](./screenshots/swagger.png)
-
-### Test Results
-![Test Results](./screenshots/test-results.png)
-
-### JaCoCo Coverage Report
-![Coverage Report](./screenshots/jacoco-coverage.png)
-
 ---
 
 ## 🤖 My AI Usage
 
-### Tools Used
-- **Claude (Anthropic)** — primary AI assistant used throughout the project
-
 ### How I Used AI
 
 | Phase | What AI helped with |
-|---|---|
-| **Project planning** | Brainstorming API endpoint structure, deciding which extra endpoints (orders, transactions, analytics) would strengthen the project |
-| **Database design** | Reviewing schema design, suggesting the `inventory_transactions` table for audit trail |
-| **TDD scaffolding** | Generating first-draft test cases for each layer (repository, service, controller, integration) which I then reviewed, corrected assertions on, and extended with edge cases |
-| **Security config** | Helping debug the Spring Security filter chain order and CORS configuration |
-| **Boilerplate** | Generating initial DTO classes, exception handlers, and entity structure |
-| **Debugging** | Diagnosing the `lower(bytea)` PostgreSQL JPQL error, the `AutoConfigureTestDatabase` package change in Spring Boot 3.x, and the `@MockBean` → `@MockitoBean` migration for Spring Boot 3.4+ |
-| **Frontend connection** | Advising on Axios interceptor setup, CORS configuration, and JWT token flow between React and Spring Boot |
+|--------|---------------------|
+| **Database design** | Reviewed the database schema and suggested improvements, including an `inventory_transactions` table to support inventory audit trails. |
+| **TDD scaffolding** | Generated initial test cases for the repository, service, controller, and integration layers. I reviewed, refined assertions, and extended the tests with additional edge cases. |
+| **Boilerplate** | Assisted in generating the initial project structure, including DTOs, entity classes, and exception handlers, which were then customized and extended. |
+| **Frontend development** | Provided guidance for building the React frontend, including component organization, routing, API integration with Axios, and general UI implementation support. |
 
 ### What I Did Manually
 - All business logic decisions (role rules, stock validation, cancel-restocks-vehicle behaviour)
@@ -664,9 +645,7 @@ This project was built as part of a technical assessment kata. All code is origi
 ## 👤 Author
 
 **Rahul**
-- GitHub: [@your-username](https://github.com/your-username)
-- Email: your-email@example.com
+- GitHub: [RahulChandra19](https://github.com/RahulChandra19)
+- Email: rahuljsr62021@gmail.com
 
----
 
-> 📝 See [PROMPTS.md](./PROMPTS.md) for the complete AI tooling chat history as required by the assessment guidelines.
