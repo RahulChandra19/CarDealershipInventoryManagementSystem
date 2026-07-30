@@ -1,0 +1,797 @@
+package com.dealership.integration;
+
+import com.dealership.dto.request.LoginRequest;
+import com.dealership.dto.request.RegisterRequest;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+class AuthIntegrationTest extends BaseIntegrationTest {
+
+    // ── register ──────────────────────────────────────────────
+
+    @Test
+    void register_returns201_andToken_withValidRequest() throws Exception {
+        RegisterRequest request = RegisterRequest.builder()
+                .username("authuser1")
+                .email("authuser1@example.com")
+                .password("password123")
+                .build();
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.token").isNotEmpty())
+                .andExpect(jsonPath("$.username").value("authuser1"))
+                .andExpect(jsonPath("$.role").value("CUSTOMER"));
+    }
+
+    @Test
+    void register_returns409_whenUsernameAlreadyExists() throws Exception {
+        // first registration succeeds
+        registerAndGetToken("duplicateuser", "dup@example.com", "password123");
+
+        // second registration with the same username should fail
+        RegisterRequest duplicate = RegisterRequest.builder()
+                .username("duplicateuser")
+                .email("other@example.com")
+                .password("password123")
+                .build();
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(duplicate)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(
+                        "Username already taken: duplicateuser"));
+    }
+
+    @Test
+    void register_returns409_whenEmailAlreadyExists() throws Exception {
+        registerAndGetToken("firstuser", "shared@example.com", "password123");
+
+        RegisterRequest duplicate = RegisterRequest.builder()
+                .username("seconduser")
+                .email("shared@example.com")   // same email
+                .password("password123")
+                .build();
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(duplicate)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(
+                        "Email already registered: shared@example.com"));
+    }
+
+    @Test
+    void register_returns400_whenRequestIsInvalid() throws Exception {
+        RegisterRequest bad = RegisterRequest.builder()
+                .username("")           // blank — fails @NotBlank
+                .email("notanemail")    // fails @Email
+                .password("short")     // fails @Size(min=8)
+                .build();
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(bad)))
+                .andExpect(status().isBadRequest());
+    }
+
+    // ── login ─────────────────────────────────────────────────
+
+    @Test
+    void login_returns200_andToken_withCorrectCredentials() throws Exception {
+        registerAndGetToken("loginuser", "loginuser@example.com", "password123");
+
+        LoginRequest login = LoginRequest.builder()
+                .username("loginuser")
+                .password("password123")
+                .build();
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(login)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").isNotEmpty())
+                .andExpect(jsonPath("$.username").value("loginuser"))
+                .andExpect(jsonPath("$.role").value("CUSTOMER"));
+    }
+
+    @Test
+    void login_returns401_withWrongPassword() throws Exception {
+        registerAndGetToken("wrongpassuser", "wrongpass@example.com", "password123");
+
+        LoginRequest bad = LoginRequest.builder()
+                .username("wrongpassuser")
+                .password("wrongpassword")
+                .build();
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(bad)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Invalid credentials"));
+    }
+
+    @Test
+    void login_returns401_whenUserDoesNotExist() throws Exception {
+        LoginRequest bad = LoginRequest.builder()
+                .username("nobody")
+                .password("password123")
+                .build();
+
+        mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(bad)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── /me ───────────────────────────────────────────────────
+
+    @Test
+    void me_returns200_withUserProfile_whenTokenIsValid() throws Exception {
+        String token = registerAndGetToken(
+                "meuser", "meuser@example.com", "password123");
+
+        mockMvc.perform(get("/api/auth/me")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value("meuser"))
+                .andExpect(jsonPath("$.email").value("meuser@example.com"))
+                .andExpect(jsonPath("$.role").value("CUSTOMER"));
+    }
+
+    @Test
+    void me_returns401_withNoToken() throws Exception {
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isUnauthorized());
+    }
+}
+
+---------------------------------------------------------------------------------------------------------------------
+package com.dealership.integration;
+
+import com.dealership.dto.request.LoginRequest;
+import com.dealership.dto.request.RegisterRequest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureMockMvc
+@Testcontainers
+public abstract class BaseIntegrationTest {
+
+    // one shared container across all integration test classes —
+    // static so it starts once and is reused, saving ~5 seconds per class
+    @Container
+    static PostgreSQLContainer<?> postgres =
+            new PostgreSQLContainer<>("postgres:16-alpine");
+
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+        // use create-drop so each test run starts with a clean schema
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+    }
+
+    @Autowired
+    protected MockMvc mockMvc;
+
+    @Autowired
+    protected ObjectMapper objectMapper;
+
+    // ── shared helpers ────────────────────────────────────────
+
+    /**
+     * Registers a user and returns the JWT token from the response.
+     */
+    protected String registerAndGetToken(String username,
+                                         String email,
+                                         String password) throws Exception {
+        RegisterRequest request = RegisterRequest.builder()
+                .username(username)
+                .email(email)
+                .password(password)
+                .build();
+
+        MvcResult result = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        return extractToken(result);
+    }
+
+    /**
+     * Logs in an existing user and returns the JWT token.
+     */
+    protected String loginAndGetToken(String username,
+                                      String password) throws Exception {
+        LoginRequest request = LoginRequest.builder()
+                .username(username)
+                .password(password)
+                .build();
+
+        MvcResult result = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        return extractToken(result);
+    }
+
+    /**
+     * Pulls the token string out of the JSON response body.
+     */
+    private String extractToken(MvcResult result) throws Exception {
+        String body = result.getResponse().getContentAsString();
+        return objectMapper.readTree(body).get("token").asText();
+    }
+}
+-------------------------------------------------------------------------------------------------------------
+package com.dealership.integration;
+
+import com.dealership.dto.request.CreateVehicleRequest;
+import com.dealership.dto.request.PurchaseRequest;
+import com.dealership.entity.User;
+import com.dealership.repository.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.math.BigDecimal;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+class OrderIntegrationTest extends BaseIntegrationTest {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    private String adminToken;
+    private String customerToken;
+    private String otherCustomerToken;
+
+    // ── setup ─────────────────────────────────────────────────
+
+    @BeforeEach
+    void setUp() throws Exception {
+        if (!userRepository.existsByUsername("orderadmin")) {
+            userRepository.save(User.builder()
+                    .username("orderadmin")
+                    .email("orderadmin@example.com")
+                    .passwordHash(passwordEncoder.encode("admin123"))
+                    .role("ADMIN")
+                    .build());
+        }
+        adminToken = loginAndGetToken("orderadmin", "admin123");
+
+        if (!userRepository.existsByUsername("ordercustomer")) {
+            registerAndGetToken("ordercustomer",
+                    "ordercustomer@example.com", "password123");
+        }
+        customerToken = loginAndGetToken("ordercustomer", "password123");
+
+        if (!userRepository.existsByUsername("othercustomer")) {
+            registerAndGetToken("othercustomer",
+                    "othercustomer@example.com", "password123");
+        }
+        otherCustomerToken = loginAndGetToken("othercustomer", "password123");
+    }
+
+    // ── GET /api/orders/me ────────────────────────────────────
+
+    @Test
+    void getMyOrders_returns200_withOrdersAfterPurchase() throws Exception {
+        Long vehicleId = createVehicleAsAdmin("Lexus", "RX", "SUV", "55000", 5);
+        purchaseAsCustomer(vehicleId, 1, customerToken);
+
+        mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].vehicleMake").value("Lexus"))
+                .andExpect(jsonPath("$[0].status").value("CONFIRMED"))
+                .andExpect(jsonPath("$[0].quantity").value(1));
+    }
+
+    @Test
+    void getMyOrders_returns200_withEmptyList_whenNoPurchasesMade() throws Exception {
+        // fresh token from a user who hasn't bought anything
+        String freshToken = registerAndGetToken(
+                "freshuser", "fresh@example.com", "password123");
+
+        mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + freshToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    void getMyOrders_doesNotReturnOtherUsersOrders() throws Exception {
+        Long vehicleId = createVehicleAsAdmin("Volvo", "XC90", "SUV", "60000", 5);
+
+        // customer buys, other customer buys separately
+        purchaseAsCustomer(vehicleId, 1, customerToken);
+        purchaseAsCustomer(vehicleId, 1, otherCustomerToken);
+
+        // each user should only see their own order
+        mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+
+        mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + otherCustomerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    // ── GET /api/orders (admin) ───────────────────────────────
+
+    @Test
+    void getAllOrders_returns200_withAllOrders_whenAdmin() throws Exception {
+        Long vehicleId = createVehicleAsAdmin("Audi", "Q7", "SUV", "70000", 5);
+        purchaseAsCustomer(vehicleId, 1, customerToken);
+        purchaseAsCustomer(vehicleId, 1, otherCustomerToken);
+
+        mockMvc.perform(get("/api/orders")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray());
+    }
+
+    @Test
+    void getAllOrders_returns403_whenCustomer() throws Exception {
+        mockMvc.perform(get("/api/orders")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isForbidden());
+    }
+
+    // ── DELETE /api/orders/{id} ───────────────────────────────
+
+    @Test
+    void cancelOrder_returns200_andRestocksVehicle_whenOwnerCancels() throws Exception {
+        Long vehicleId = createVehicleAsAdmin("Mercedes", "GLE", "SUV", "75000", 5);
+        purchaseAsCustomer(vehicleId, 2, customerToken);
+
+        // get the order id from /me
+        var result = mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        Long orderId = objectMapper.readTree(
+                result.getResponse().getContentAsString()).get(0).get("id").asLong();
+
+        // cancel it
+        mockMvc.perform(delete("/api/orders/" + orderId)
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Order cancelled successfully"));
+
+        // vehicle quantity should be restocked (5 - 2 + 2 = 5 again)
+        mockMvc.perform(get("/api/vehicles/" + vehicleId)
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.quantity").value(5));
+    }
+
+    @Test
+    void cancelOrder_returns200_whenAdminCancelsAnyOrder() throws Exception {
+        Long vehicleId = createVehicleAsAdmin("Genesis", "GV80", "SUV", "65000", 3);
+        purchaseAsCustomer(vehicleId, 1, customerToken);
+
+        var result = mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andReturn();
+
+        Long orderId = objectMapper.readTree(
+                result.getResponse().getContentAsString()).get(0).get("id").asLong();
+
+        // admin cancels the customer's order
+        mockMvc.perform(delete("/api/orders/" + orderId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Order cancelled successfully"));
+    }
+
+    @Test
+    void cancelOrder_returns403_whenCustomerCancelsOtherUsersOrder() throws Exception {
+        Long vehicleId = createVehicleAsAdmin("Lincoln", "Navigator", "SUV", "80000", 3);
+        purchaseAsCustomer(vehicleId, 1, customerToken);
+
+        var result = mockMvc.perform(get("/api/orders/me")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andReturn();
+
+        Long orderId = objectMapper.readTree(
+                result.getResponse().getContentAsString()).get(0).get("id").asLong();
+
+        // other customer tries to cancel an order that doesn't belong to them
+        mockMvc.perform(delete("/api/orders/" + orderId)
+                        .header("Authorization", "Bearer " + otherCustomerToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(
+                        "You are not authorized to cancel this order"));
+    }
+
+    @Test
+    void cancelOrder_returns404_whenOrderDoesNotExist() throws Exception {
+        mockMvc.perform(delete("/api/orders/999999")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isNotFound());
+    }
+
+    // ── private helpers ───────────────────────────────────────
+
+    private Long createVehicleAsAdmin(String make, String model,
+                                      String category, String price,
+                                      int quantity) throws Exception {
+        CreateVehicleRequest request = CreateVehicleRequest.builder()
+                .make(make).model(model).year(2023)
+                .category(category)
+                .price(new BigDecimal(price))
+                .quantity(quantity)
+                .build();
+
+        var result = mockMvc.perform(post("/api/vehicles")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        return objectMapper.readTree(
+                result.getResponse().getContentAsString()).get("id").asLong();
+    }
+
+    private void purchaseAsCustomer(Long vehicleId,
+                                    int quantity,
+                                    String token) throws Exception {
+        PurchaseRequest request = PurchaseRequest.builder()
+                .quantity(quantity).build();
+
+        mockMvc.perform(post("/api/vehicles/" + vehicleId + "/purchase")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+    }
+}
+--------------------------------------------------------------------------------------------------------------------
+package com.dealership.integration;
+
+import com.dealership.dto.request.CreateVehicleRequest;
+import com.dealership.dto.request.PurchaseRequest;
+import com.dealership.dto.request.UpdateVehicleRequest;
+import com.dealership.entity.User;
+import com.dealership.repository.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.math.BigDecimal;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+class VehicleIntegrationTest extends BaseIntegrationTest {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    private String adminToken;
+    private String customerToken;
+
+    // ── setup ─────────────────────────────────────────────────
+
+    @BeforeEach
+    void setUp() throws Exception {
+        // create admin directly in DB — register endpoint only creates CUSTOMERs
+        if (!userRepository.existsByUsername("admin")) {
+            userRepository.save(User.builder()
+                    .username("admin")
+                    .email("admin@example.com")
+                    .passwordHash(passwordEncoder.encode("admin123"))
+                    .role("ADMIN")
+                    .build());
+        }
+
+        adminToken = loginAndGetToken("admin", "admin123");
+
+        // customer registers normally through the API
+        if (!userRepository.existsByUsername("customer")) {
+            registerAndGetToken("customer", "customer@example.com", "password123");
+        }
+        customerToken = loginAndGetToken("customer", "password123");
+    }
+
+    // ── create vehicle (ADMIN) ────────────────────────────────
+
+    @Test
+    void createVehicle_returns201_whenAdmin() throws Exception {
+        CreateVehicleRequest request = CreateVehicleRequest.builder()
+                .make("Toyota").model("Camry").year(2023)
+                .category("SEDAN").price(new BigDecimal("28000"))
+                .quantity(10).build();
+
+        mockMvc.perform(post("/api/vehicles")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").isNotEmpty())
+                .andExpect(jsonPath("$.make").value("Toyota"))
+                .andExpect(jsonPath("$.quantity").value(10));
+    }
+
+    @Test
+    void createVehicle_returns403_whenCustomer() throws Exception {
+        CreateVehicleRequest request = CreateVehicleRequest.builder()
+                .make("Honda").model("Civic").year(2023)
+                .category("SEDAN").price(new BigDecimal("22000"))
+                .quantity(5).build();
+
+        mockMvc.perform(post("/api/vehicles")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void createVehicle_returns401_whenNotAuthenticated() throws Exception {
+        CreateVehicleRequest request = CreateVehicleRequest.builder()
+                .make("Honda").model("Civic").year(2023)
+                .category("SEDAN").price(new BigDecimal("22000"))
+                .quantity(5).build();
+
+        mockMvc.perform(post("/api/vehicles")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── list vehicles ─────────────────────────────────────────
+
+    @Test
+    void getVehicles_returns200_withPaginatedList() throws Exception {
+        // seed a vehicle first
+        createVehicleAsAdmin("Ford", "F-150", "TRUCK", "45000", 5);
+
+        mockMvc.perform(get("/api/vehicles")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .param("page", "0")
+                        .param("size", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[0].make").exists());
+    }
+
+    @Test
+    void getVehicles_returns401_whenNotAuthenticated() throws Exception {
+        mockMvc.perform(get("/api/vehicles"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── get by id ─────────────────────────────────────────────
+
+    @Test
+    void getVehicleById_returns200_whenVehicleExists() throws Exception {
+        Long id = createVehicleAsAdmin("BMW", "X5", "SUV", "65000", 3);
+
+        mockMvc.perform(get("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id))
+                .andExpect(jsonPath("$.make").value("BMW"));
+    }
+
+    @Test
+    void getVehicleById_returns404_whenVehicleDoesNotExist() throws Exception {
+        mockMvc.perform(get("/api/vehicles/999999")
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value(
+                        "Vehicle not found with id: 999999"));
+    }
+
+    // ── search ────────────────────────────────────────────────
+
+    @Test
+    void searchVehicles_returnMatchingResults_byCategory() throws Exception {
+        createVehicleAsAdmin("Chevrolet", "Silverado", "TRUCK", "50000", 4);
+        createVehicleAsAdmin("Tesla", "Model 3", "SEDAN", "45000", 2);
+
+        mockMvc.perform(get("/api/vehicles/search")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .param("category", "TRUCK"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].category").value("TRUCK"));
+    }
+
+    @Test
+    void searchVehicles_returnMatchingResults_byPriceRange() throws Exception {
+        createVehicleAsAdmin("Toyota", "Corolla", "SEDAN", "20000", 6);
+        createVehicleAsAdmin("Porsche", "911", "COUPE", "120000", 1);
+
+        mockMvc.perform(get("/api/vehicles/search")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .param("minPrice", "10000")
+                        .param("maxPrice", "50000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].make").value("Toyota"));
+    }
+
+    @Test
+    void searchVehicles_returnsEmptyList_whenNoMatch() throws Exception {
+        mockMvc.perform(get("/api/vehicles/search")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .param("make", "Lamborghini"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    // ── update (PUT) ──────────────────────────────────────────
+
+    @Test
+    void updateVehicle_returns200_andUpdatedFields_whenAdmin() throws Exception {
+        Long id = createVehicleAsAdmin("Kia", "Stinger", "SEDAN", "35000", 3);
+
+        UpdateVehicleRequest update = UpdateVehicleRequest.builder()
+                .make("Kia").model("Stinger GT").year(2024)
+                .category("SEDAN").price(new BigDecimal("37000"))
+                .quantity(5).build();
+
+        mockMvc.perform(put("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(update)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.model").value("Stinger GT"))
+                .andExpect(jsonPath("$.price").value(37000))
+                .andExpect(jsonPath("$.quantity").value(5));
+    }
+
+    // ── soft delete ───────────────────────────────────────────
+
+    @Test
+    void deleteVehicle_returns204_andVehicleNoLongerVisible_whenAdmin() throws Exception {
+        Long id = createVehicleAsAdmin("Mazda", "CX-5", "SUV", "30000", 4);
+
+        // admin soft-deletes it
+        mockMvc.perform(delete("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isNoContent());
+
+        // should now return 404 since isActive=false
+        mockMvc.perform(get("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void deleteVehicle_returns403_whenCustomer() throws Exception {
+        Long id = createVehicleAsAdmin("Mazda", "MX-5", "COUPE", "28000", 2);
+
+        mockMvc.perform(delete("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isForbidden());
+    }
+
+    // ── purchase ──────────────────────────────────────────────
+
+    @Test
+    void purchase_returns200_andDecrementsQuantityInDB() throws Exception {
+        Long id = createVehicleAsAdmin("Hyundai", "Tucson", "SUV", "28000", 5);
+
+        PurchaseRequest purchase = PurchaseRequest.builder().quantity(2).build();
+
+        mockMvc.perform(post("/api/vehicles/" + id + "/purchase")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(purchase)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Purchase successful"));
+
+        // verify quantity actually decremented in the DB
+        mockMvc.perform(get("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + customerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.quantity").value(3));
+    }
+
+    @Test
+    void purchase_returns409_whenInsufficientStock() throws Exception {
+        Long id = createVehicleAsAdmin("Nissan", "Leaf", "SEDAN", "35000", 1);
+
+        PurchaseRequest purchase = PurchaseRequest.builder().quantity(10).build();
+
+        mockMvc.perform(post("/api/vehicles/" + id + "/purchase")
+                        .header("Authorization", "Bearer " + customerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(purchase)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Only 1 unit(s) available"));
+    }
+
+    // ── restock (ADMIN) ───────────────────────────────────────
+
+    @Test
+    void restock_returns200_andIncrementsQuantityInDB() throws Exception {
+        Long id = createVehicleAsAdmin("Subaru", "Outback", "SUV", "32000", 2);
+
+        mockMvc.perform(post("/api/vehicles/" + id + "/restock")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"quantity\": 8}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Restock successful"));
+
+        // verify quantity incremented
+        mockMvc.perform(get("/api/vehicles/" + id)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.quantity").value(10));
+    }
+
+    // ── private helper ────────────────────────────────────────
+
+    /**
+     * Creates a vehicle as admin and returns its generated ID.
+     * Used to seed data for test cases without copy-pasting the full HTTP call.
+     */
+    private Long createVehicleAsAdmin(String make, String model,
+                                      String category, String price,
+                                      int quantity) throws Exception {
+        CreateVehicleRequest request = CreateVehicleRequest.builder()
+                .make(make).model(model).year(2023)
+                .category(category)
+                .price(new BigDecimal(price))
+                .quantity(quantity)
+                .build();
+
+        var result = mockMvc.perform(post("/api/vehicles")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        String body = result.getResponse().getContentAsString();
+        return objectMapper.readTree(body).get("id").asLong();
+    }
+}
