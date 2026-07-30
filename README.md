@@ -593,7 +593,7 @@ target/site/jacoco/index.html
 > Add your screenshots below by replacing the placeholder paths.
 
 ### Login Page
-![Login Page](./screenshots/login.png.png)
+![Login Page](./screenshots/login.png)
 
 ### Register Page
 ![Register Page](./screenshots/register.png)
@@ -602,7 +602,7 @@ target/site/jacoco/index.html
 ![Dashboard](./screenshots/dashboard.png)
 
 ### Vehicle Detail & Purchase
-![Vehicle Detail](./screenshots/vehicle-detail.png)
+![Vehicle Detail](./screenshots/vehicle-details.png)
 
 ### Admin — Add Vehicle
 ![Add Vehicle](./screenshots/add-vehicle.png)
